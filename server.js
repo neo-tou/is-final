@@ -6,20 +6,13 @@ const app = express();
 app.use(express.json());
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN;
-const APIFY_ACTOR_TASK_ID = process.env.APIFY_ACTOR_TASK_ID; // the task ID of your chess-scraper
-
+const APIFY_ACTOR_TASK_ID = process.env.APIFY_ACTOR_TASK_ID; // e.g. Vx0htPvlUTUMgOzB3
 if (!APIFY_TOKEN || !APIFY_ACTOR_TASK_ID) {
-    console.warn("⚠️ APIFY_TOKEN or APIFY_ACTOR_TASK_ID is not set. Actor calls will fail.");
+    console.warn('APIFY_TOKEN or APIFY_ACTOR_TASK_ID not set in env');
 }
 
-// Run the actor task sync
-function getActorRunSyncUrl() {
+function getTaskRunSyncUrl() {
     return `https://api.apify.com/v2/actor-tasks/${APIFY_ACTOR_TASK_ID}/run-sync?token=${APIFY_TOKEN}`;
-}
-
-// Get dataset items
-function getDatasetUrl(datasetId) {
-    return `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}`;
 }
 
 app.post('/scrape', async (req, res) => {
@@ -27,38 +20,40 @@ app.post('/scrape', async (req, res) => {
     if (!url) return res.status(400).json({ error: "Missing 'url' in request body" });
 
     try {
-        // 1️⃣ Run the actor task sync
-        const actorResp = await axios.post(getActorRunSyncUrl(), { input: { startUrls: [url] } }, {
-            headers: { 'Content-Type': 'application/json' },
-        });
+        const response = await axios.post(
+            getTaskRunSyncUrl(),
+            { input: { startUrls: [url] } },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 120000 }
+        );
 
-        // 2️⃣ Actor returns a run object
-        const runData = actorResp.data;
+        // First try OUTPUT
+        let data = response.data?.output ?? null;
 
-        if (!runData || !runData.defaultDatasetId) {
-            return res.status(500).json({ error: 'Actor finished but no dataset found' });
+        // Fallback: check dataset if OUTPUT is empty
+        if (!data) {
+            const datasetId = response.data?.defaultDatasetId;
+            if (datasetId) {
+                const datasetResp = await axios.get(
+                    `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}`
+                );
+                data = datasetResp.data;
+            }
         }
 
-        const datasetId = runData.defaultDatasetId;
-
-        // 3️⃣ Fetch dataset items
-        const datasetResp = await axios.get(getDatasetUrl(datasetId));
-
-        const items = datasetResp.data;
-        if (!items || items.length === 0) {
-            return res.status(500).json({ error: 'Dataset is empty' });
+        if (!data || (Array.isArray(data) && data.length === 0)) {
+            return res.status(500).json({
+                error: 'Actor finished but returned no output',
+                details: response.data
+            });
         }
 
-        // 4️⃣ Return the first item (you can also return all items)
-        return res.json(items[0]);
-
+        return res.json(data);
     } catch (err) {
-        console.error('Error calling Apify actor or fetching dataset:', err.toString());
-        return res.status(500).json({ error: 'Scraper failed', details: err.toString() });
+        console.error('Error calling Apify run-sync:', err?.response?.data ?? err?.toString());
+        const details = err?.response?.data ?? String(err);
+        return res.status(500).json({ error: 'Scraper failed', details });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Server running at http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server listening on ${PORT}`));
