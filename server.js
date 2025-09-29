@@ -1,8 +1,14 @@
-// server.js
 import express from 'express';
 import axios from 'axios';
+import cors from 'cors';  // ✅ import cors
 
 const app = express();
+
+// ⚡ Enable CORS for all routes
+app.use(cors({
+    origin: '*'  // allow all origins; for production, replace '*' with your frontend URL
+}));
+
 app.use(express.json());
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN;
